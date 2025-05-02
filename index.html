@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Corretor de Gabarito - QR Code</title>
+  <script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js"></script>
+  <script src="https://unpkg.com/html5-qrcode"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.min.js"></script>
+  <style>
+    body { font-family: Arial, sans-serif; padding: 20px; background: #f4f4f4; }
+    h1 { color: #333; }
+    textarea, input, button { margin: 10px 0; width: 100%; padding: 10px; }
+    table { border-collapse: collapse; width: 100%; margin-top: 20px; }
+    th, td { border: 1px solid #999; padding: 8px; text-align: center; }
+    th { background-color: #ddd; }
+    #reader, #readerGabarito { width: 100%; max-width: 500px; margin: 0 auto; }
+    #contador { font-weight: bold; margin-top: 10px; }
+  </style>
+</head>
+<body>
+  <h1>Corretor de Gabarito - QR Code</h1>
+
+  <label>📋 Gabarito oficial (ex: A,B,C,D,A)</label>
+  <textarea id="gabarito" placeholder="Cole aqui o gabarito oficial do professor"></textarea>
+
+  <button onclick="iniciarLeitorQRCode()">📷 Ler QR Code dos Alunos</button>
+  <button onclick="pararLeitorQRCode()">✋ Parar Leitura</button>
+  <button onclick="exportarExcel()">📄 Exportar para Excel</button>
+
+  <hr>
+  <h2>📸 Leitura Visual do Gabarito do Aluno</h2>
+  <input type="file" accept="image/*,application/pdf" capture="environment" onchange="lerArquivoGabarito(event)">
+  <canvas id="canvasGabarito" style="display: none;"></canvas>
+  <div id="resultadoImagem"></div>
+
+  <div id="reader"></div>
+  <div id="contador">Alunos corrigidos: 0</div>
+  <div id="resultado"></div>
+
+  <script>
+    let todasCorrecao = [];
+    let contador = 0;
+    let leitorQRCode;
+
+    function corrigirAutomatico(dadosQRCode) {
+      try {
+        const partes = dadosQRCode.split(';');
+        const dados = {};
+
+        for (let parte of partes) {
+          const [chave, valor] = parte.split('=');
+          if (chave && valor) dados[chave.trim()] = valor.trim();
+        }
+
+        const nome = dados.nome || 'Sem nome';
+        const respostasAluno = dados.respostas ? dados.respostas.split(',') : [];
+
+        const gabarito = document.getElementById("gabarito").value.toUpperCase().split(',');
+        let acertos = 0;
+        let linhas = [];
+
+        for (let i = 0; i < gabarito.length; i++) {
+          const certa = gabarito[i];
+          const resp = respostasAluno[i] || "-";
+          const acertou = certa === resp ? "✅" : "❌";
+          if (certa === resp) acertos++;
+          linhas.push([nome, i + 1, certa, resp, acertou]);
+        }
+
+        todasCorrecao.push(...linhas);
+        contador++;
+        document.getElementById("contador").innerText = `Alunos corrigidos: ${contador}`;
+
+        let tabelaHTML = `<h2>Último aluno corrigido: ${nome}</h2>`;
+        tabelaHTML += `<table><tr><th>Aluno</th><th>#</th><th>Gabarito</th><th>Resposta</th><th>Acertou?</th></tr>`;
+        for (let linha of linhas) {
+          tabelaHTML += `<tr><td>${linha[0]}</td><td>${linha[1]}</td><td>${linha[2]}</td><td contenteditable='true'>${linha[3]}</td><td>${linha[4]}</td></tr>`;
+        }
+        tabelaHTML += `</table><p><strong>Nota:</strong> ${acertos} / ${gabarito.length}</p>`;
+        document.getElementById("resultado").innerHTML = tabelaHTML;
+      } catch (erro) {
+        alert("Erro ao interpretar os dados. Verifique o formato dos dados.");
+        console.error("Erro na correção automática:", erro);
+      }
+    }
+
+    function iniciarLeitorQRCode() {
+      leitorQRCode = new Html5Qrcode("reader");
+      Html5Qrcode.getCameras().then(devices => {
+        if (devices && devices.length) {
+          const cameraId = devices[0].id;
+          leitorQRCode.start(
+            cameraId,
+            { fps: 10, qrbox: 250 },
+            qrCodeMessage => corrigirAutomatico(qrCodeMessage),
+            errorMessage => {}
+          );
+        }
+      });
+    }
+
+    function pararLeitorQRCode() {
+      if (leitorQRCode) {
+        leitorQRCode.stop().then(() => {
+          document.getElementById("reader").innerHTML = "<p>Leitura finalizada.</p>";
+        }).catch(err => console.error("Erro ao parar leitura: ", err));
+      }
+    }
+
+    function exportarExcel() {
+      if (todasCorrecao.length === 0) return alert("Nenhum aluno corrigido ainda.");
+      const wb = XLSX.utils.book_new();
+      const ws_data = [["Aluno", "Questão", "Gabarito", "Resposta", "Acertou?"], ...todasCorrecao];
+      const ws = XLSX.utils.aoa_to_sheet(ws_data);
+      XLSX.utils.book_append_sheet(wb, ws, "Correcao em lote");
+      XLSX.writeFile(wb, "correcao_lote.xlsx");
+    }
+
+    function lerArquivoGabarito(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+      if (file.type === 'application/pdf') {
+        const reader = new FileReader();
+        reader.onload = function () {
+          const typedarray = new Uint8Array(reader.result);
+          pdfjsLib.getDocument(typedarray).promise.then(pdf => {
+            pdf.getPage(1).then(page => {
+              const canvas = document.getElementById("canvasGabarito");
+              const context = canvas.getContext("2d");
+              const viewport = page.getViewport({ scale: 2 });
+              canvas.height = viewport.height;
+              canvas.width = viewport.width;
+              page.render({ canvasContext: context, viewport: viewport }).promise.then(() => {
+                processarCanvasParaBolinhas(canvas);
+              });
+            });
+          });
+        };
+        reader.readAsArrayBuffer(file);
+      } else {
+        const img = new Image();
+        img.onload = function () {
+          const canvas = document.getElementById("canvasGabarito");
+          const ctx = canvas.getContext("2d");
+          canvas.width = img.width;
+          canvas.height = img.height;
+          ctx.drawImage(img, 0, 0);
+          processarCanvasParaBolinhas(canvas);
+        };
+        const reader = new FileReader();
+        reader.onload = e => img.src = e.target.result;
+        reader.readAsDataURL(file);
+      }
+    }
+
+    function processarCanvasParaBolinhas(canvas) {
+      const ctx = canvas.getContext("2d");
+      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const threshold = 100;
+      const bolinhasMarcadas = [];
+      const linhas = 10;
+      const colunas = 5;
+      const espacoY = canvas.height / linhas;
+      const espacoX = canvas.width / colunas;
+
+      for (let i = 0; i < linhas; i++) {
+        let marcado = "-";
+        for (let j = 0; j < colunas; j++) {
+          const cx = Math.floor(j * espacoX + espacoX / 2);
+          const cy = Math.floor(i * espacoY + espacoY / 2);
+          const idx = (cy * canvas.width + cx) * 4;
+          const [r, g, b] = [imageData.data[idx], imageData.data[idx + 1], imageData.data[idx + 2]];
+          const media = (r + g + b) / 3;
+          if (media < threshold) {
+            marcado = String.fromCharCode(65 + j);
+            break;
+          }
+        }
+        bolinhasMarcadas.push(marcado);
+      }
+
+      document.getElementById("resultadoImagem").innerHTML =
+        `<p>Respostas detectadas: ${bolinhasMarcadas.join(', ')}</p>`;
+      corrigirAutomatico(`nome=AlunoImagem;respostas=${bolinhasMarcadas.join(',')}`);
+    }
+  </script>
+</body>
+</html>
